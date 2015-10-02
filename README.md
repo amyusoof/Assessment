@@ -1,5 +1,4 @@
-# productManagement
-Assessment using spring mvc, security and data
+
 
 
 Steps for deployment
