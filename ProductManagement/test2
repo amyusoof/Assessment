@@ -1,0 +1,382 @@
+<!-- my-service-direct-s3/pom.xml -->
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.1</version> <!-- Use a recent stable Spring Boot version -->
+        <relativePath/> <!-- lookup parent from repository -->
+    </parent>
+    <groupId>com.example</groupId>
+    <artifactId>my-service-direct-s3</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>my-service-direct-s3</name>
+    <description>Spring Boot App Directly Fetching Config from S3</description>
+
+    <properties>
+        <java.version>17</java.version>
+        <aws-java-sdk.version>2.25.10</aws-java-sdk.version> <!-- Latest AWS SDK for Java 2.x -->
+        <snakeyaml.version>2.2</snakeyaml.version> <!-- For parsing YAML files -->
+        <!-- No spring-cloud.version needed here as we are not using Spring Cloud starters -->
+    </properties>
+
+    <dependencies>
+        <!-- Spring Boot Web Starter for creating REST endpoints -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Spring Boot Actuator for management endpoints like /health -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- AWS SDK for S3 client operations -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>${aws-java-sdk.version}</version>
+        </dependency>
+        <!-- Required for parsing YAML files into Properties -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>${snakeyaml.version}</version>
+        </dependency>
+
+        <!-- NOTE: spring-cloud-starter-bootstrap is NOT included here,
+             as it's deprecated/removed in newer Spring Cloud versions.
+             We use EnvironmentPostProcessor instead for early config loading. -->
+
+        <!-- Spring Boot Test Starter for testing -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
+```java
+// my-service-direct-s3/src/main/java/com/example/myservicedirects3/MyServiceDirectS3Application.java
+package com.example.myservicedirects3;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.core.env.Environment; // Import Environment
+
+/**
+ * Main Spring Boot application.
+ * This application directly loads configurations from S3 using a custom EnvironmentPostProcessor.
+ * Property values are read on demand from the Environment when the endpoint is called.
+ */
+@SpringBootApplication // Marks this as a Spring Boot application
+@RestController // Marks this class as a REST controller to handle web requests
+public class MyServiceDirectS3Application {
+
+    // Inject the Spring Environment object.
+    // This object holds all the configuration properties available to the application,
+    // including those loaded by our S3EnvironmentPostProcessor.
+    private final Environment environment;
+
+    // Constructor injection for the Environment.
+    // Spring automatically provides the Environment instance when creating this bean.
+    public MyServiceDirectS3Application(Environment environment) {
+        this.environment = environment;
+    }
+
+    public static void main(String[] args) {
+        // Standard Spring Boot application entry point.
+        // Our custom S3EnvironmentPostProcessor will be automatically discovered
+        // and executed during this run, before the main application context is fully refreshed.
+        SpringApplication.run(MyServiceDirectS3Application.class, args);
+    }
+
+    /**
+     * REST endpoint to display the loaded configuration properties.
+     * This method demonstrates reading property values directly from the injected
+     * Environment object on demand when the endpoint is accessed.
+     *
+     * Access this endpoint in your browser or with curl: http://localhost:8080/config-info
+     *
+     * @return A formatted string showing the fetched configuration values.
+     */
+    @GetMapping("/config-info")
+    public String getConfigInfo() {
+        // Read property values directly from the Environment object.
+        // .getProperty("key", "defaultValue") allows providing a fallback value
+        // if the property is not found in any loaded PropertySource.
+        String message = environment.getProperty("message", "Default Message from Environment (Fallback)");
+        String appEnvironment = environment.getProperty("application.environment", "Unknown Environment (Fallback)");
+        String commonProperty = environment.getProperty("common.property", "No Common Property (Fallback)");
+
+        return String.format(
+            "Hello from MyService (%s): Message: '%s', Common Property: '%s'",
+            appEnvironment, message, commonProperty
+        );
+    }
+}
+```java
+// my-service-direct-s3/src/main/java/com/example/myservicedirects3/S3EnvironmentPostProcessor.java
+package com.example.myservicedirects3;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.env.EnvironmentPostProcessor;
+import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.io.ByteArrayResource;
+import org.yaml.snakeyaml.Yaml;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.core.ResponseBytes;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
+import java.util.stream.Collectors;
+
+/**
+ * Custom EnvironmentPostProcessor to load configurations directly from AWS S3.
+ * This class implements Spring Boot's EnvironmentPostProcessor interface, allowing it
+ * to be discovered and invoked very early in the application lifecycle.
+ * It modifies the application's Environment by adding property sources from S3
+ * before the main application context is refreshed.
+ * This approach does NOT require the `spring-cloud-starter-bootstrap` dependency.
+ */
+public class S3EnvironmentPostProcessor implements EnvironmentPostProcessor {
+
+    // Define property keys that will be used to configure this post-processor.
+    // These values are typically read from the application's local `application.properties`
+    // or `application.yml`, or from system properties/environment variables.
+    private static final String S3_BUCKET_NAME_PROPERTY = "s3.config.bucket-name";
+    private static final String S3_REGION_PROPERTY = "s3.config.region";
+    private static final String APPLICATION_NAME_PROPERTY = "spring.application.name";
+    private static final String ACTIVE_PROFILES_PROPERTY = "spring.profiles.active";
+    private static final String CONFIG_LABEL_PROPERTY = "s3.config.label";
+
+    /**
+     * This method is the entry point for the EnvironmentPostProcessor.
+     * It's called by Spring Boot to allow modification of the environment.
+     *
+     * @param environment The mutable Spring Environment, allowing us to add new PropertySources.
+     * @param application The SpringApplication instance.
+     */
+    @Override
+    public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+        // Retrieve necessary configuration parameters from the current environment.
+        // These are used to construct the S3 object keys (paths).
+        String bucketName = environment.getProperty(S3_BUCKET_NAME_PROPERTY);
+        String regionName = environment.getProperty(S3_REGION_PROPERTY);
+        String applicationName = environment.getProperty(APPLICATION_NAME_PROPERTY);
+        // Get active profiles. If none specified, default to "default".
+        String profile = environment.getProperty(ACTIVE_PROFILES_PROPERTY, "default");
+        // Get the configuration label. If none specified, default to "main".
+        String label = environment.getProperty(CONFIG_LABEL_PROPERTY, "main");
+
+        // Basic validation: if critical S3 connection or application identification
+        // properties are missing, we cannot proceed with S3 config loading.
+        if (bucketName == null || regionName == null || applicationName == null) {
+            System.err.println("S3EnvironmentPostProcessor: Missing required S3 config properties " +
+                               "(s3.config.bucket-name, s3.config.region, spring.application.name). Skipping S3 config load.");
+            return; // Exit the post-processor if critical properties are missing.
+        }
+
+        System.out.println(String.format("S3EnvironmentPostProcessor: Attempting to load config for app='%s', profile='%s', label='%s' from S3 bucket '%s' in region '%s'",
+                applicationName, profile, label, bucketName, regionName));
+
+        // A HashMap to collect all properties loaded from S3 files.
+        // Properties from higher precedence files (processed later in the loop)
+        // will overwrite existing properties in this map if keys are duplicated.
+        Map<String, Object> s3Properties = new HashMap<>();
+
+        S3Client s3Client = null; // Declare S3Client outside try-catch for proper closing in finally block
+
+        try {
+            // Initialize S3 client with the specified region.
+            // AWS SDK v2 automatically uses the Default Credential Provider Chain
+            // (e.g., environment variables, ~/.aws/credentials file, EC2 instance profiles).
+            s3Client = S3Client.builder()
+                    .region(Region.of(regionName))
+                    .build();
+
+            // Define potential S3 object keys (file paths) to try.
+            // The order here is crucial: list paths from LOWEST precedence to HIGHEST precedence.
+            // This way, when `s3Properties.putAll(currentFileProperties)` is called,
+            // properties from higher precedence files (later in this array) will correctly
+            // overwrite those from lower precedence files (earlier in this array).
+            String[] pathsToTry = {
+                String.format("%s/application.properties", applicationName), // Lowest precedence
+                String.format("%s/application.yml", applicationName),
+                String.format("%s/%s-%s.properties", applicationName, applicationName, profile),
+                String.format("%s/%s-%s.yml", applicationName, applicationName, profile),
+                String.format("%s/%s/application.properties", applicationName, label),
+                String.format("%s/%s/application.yml", applicationName, label),
+                String.format("%s/%s/%s-%s.properties", applicationName, label, applicationName, profile),
+                String.format("%s/%s/%s-%s.yml", applicationName, label, applicationName, profile) // Highest precedence
+            };
+
+            // Iterate through the defined paths and attempt to load configuration from S3.
+            for (String path : pathsToTry) {
+                try {
+                    GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                            .bucket(bucketName)
+                            .key(path)
+                            .build();
+
+                    // Retrieve the S3 object's content as bytes using AWS SDK v2's direct method.
+                    ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
+                    byte[] contentBytes = objectBytes.asByteArray();
+                    String fileContent = new String(contentBytes); // Convert bytes to String for parsing
+
+                    Map<String, Object> currentFileProperties = new HashMap<>();
+                    if (path.endsWith(".yml")) {
+                        // Use SnakeYAML library to parse YAML content into a Map.
+                        Yaml yaml = new Yaml();
+                        Map<String, Object> yamlMap = yaml.load(fileContent);
+                        // Flatten the nested YAML map into a single-level map with dot-separated keys.
+                        flattenYamlMap(yamlMap, "", currentFileProperties);
+                    } else if (path.endsWith(".properties")) {
+                        // Use Java's built-in Properties class to parse .properties content.
+                        Properties props = new Properties();
+                        props.load(new ByteArrayResource(contentBytes).getInputStream());
+                        // Convert Properties object to a Map<String, Object>.
+                        currentFileProperties = props.entrySet().stream()
+                                .collect(Collectors.toMap(
+                                        e -> String.valueOf(e.getKey()),
+                                        Map.Entry::getValue
+                                ));
+                    }
+
+                    if (!currentFileProperties.isEmpty()) {
+                        System.out.println("S3EnvironmentPostProcessor: Successfully loaded properties from: " + path);
+                        // Merge properties from the current file into the overall s3Properties map.
+                        // `putAll` ensures that properties from `currentFileProperties` (which
+                        // represent a higher precedence file in this loop's order) will overwrite
+                        // any existing properties with the same keys in `s3Properties`.
+                        s3Properties.putAll(currentFileProperties);
+                    }
+                } catch (S3Exception e) {
+                    if (e.statusCode() == 404) {
+                        // This is expected for paths where a config file doesn't exist; continue to the next path.
+                    } else {
+                        // Log other S3 access errors (e.g., permission denied, invalid bucket).
+                        System.err.println("S3EnvironmentPostProcessor: Error accessing S3 file " + path + ": " + e.getMessage());
+                        // Optionally, you might want to rethrow a specific exception here if
+                        // S3 access failure is considered a critical startup error.
+                    }
+                } catch (IOException e) {
+                    // Log errors encountered while reading the S3 object's content or parsing the file.
+                    System.err.println("S3EnvironmentPostProcessor: Error reading or parsing file " + path + ": " + e.getMessage());
+                    // Optionally, rethrow if file parsing failure is critical.
+                }
+            }
+
+        } catch (Exception e) {
+            // Catch any general exceptions that occur during S3 client initialization or the overall process.
+            System.err.println("S3EnvironmentPostProcessor: Failed to initialize S3 client or load properties: " + e.getMessage());
+            // If S3 configuration is absolutely critical for your application to start,
+            // you might throw a RuntimeException here to prevent the application from launching.
+            // throw new RuntimeException("Critical: Failed to load S3 configuration at startup", e);
+        } finally {
+            // Ensure the S3 client is closed to release resources, even if errors occur.
+            if (s3Client != null) {
+                s3Client.close();
+            }
+        }
+
+        // After attempting to load from all paths, if any properties were found,
+        // add them as a new PropertySource to the Spring Environment.
+        // `addFirst` ensures this new PropertySource has high precedence,
+        // overriding properties from `application.properties` but allowing
+        // command-line arguments and environment variables to still override it.
+        if (!s3Properties.isEmpty()) {
+            environment.getPropertySources().addFirst(new MapPropertySource("s3-config-properties", s3Properties));
+        }
+    }
+
+    /**
+     * Helper method to flatten a nested YAML map into a single-level map
+     * with dot-separated keys (e.g., "parent.child.property").
+     * This is necessary because Spring's `MapPropertySource` expects a flat map.
+     *
+     * @param yamlMap The current map (or sub-map) to flatten.
+     * @param prefix The accumulated prefix for keys (e.g., "db.datasource").
+     * @param target The target map where the flattened properties are stored.
+     */
+    private void flattenYamlMap(Map<String, Object> yamlMap, String prefix, Map<String, Object> target) {
+        if (yamlMap == null) {
+            return;
+        }
+        yamlMap.forEach((key, value) -> {
+            // Construct the new key by concatenating the prefix and the current key.
+            String newKey = prefix.isEmpty() ? key : prefix + "." + key;
+            if (value instanceof Map) {
+                // If the value is another map, recursively call flattenYamlMap to process it.
+                flattenYamlMap((Map<String, Object>) value, newKey, target);
+            } else if (value instanceof java.util.Collection) {
+                // For collections (lists), convert them to a string representation for simplicity.
+                // More complex handling might involve iterating and creating keys like "list[0].prop".
+                target.put(newKey, value.toString());
+            }
+            else {
+                // Otherwise, it's a simple key-value pair, so add it directly to the target map.
+                target.put(newKey, value);
+            }
+        });
+    }
+}
+```properties
+# my-service-direct-s3/src/main/resources/application.properties
+# This file contains the application's local default configuration
+# and the parameters needed by our custom S3EnvironmentPostProcessor.
+
+server.port=8080 # The port on which this Spring Boot application will run
+
+# S3 Configuration for the custom S3EnvironmentPostProcessor.
+# These properties are read by the post-processor to know which S3 bucket to connect to.
+# IMPORTANT: Replace 'my-spring-config-bucket' with your actual S3 bucket name.
+s3.config.bucket-name=my-spring-config-bucket
+# IMPORTANT: Replace 'eu-west-2' with your S3 bucket's AWS region.
+s3.config.region=eu-west-2
+
+# Application identification properties.
+# These are used by the S3EnvironmentPostProcessor to construct the S3 object paths.
+# 'spring.application.name' will be used as the top-level directory (e.g., 'my-service/').
+spring.application.name=my-service
+# 'spring.profiles.active' determines the profile-specific file (e.g., 'my-service-dev.yml').
+spring.profiles.active=dev
+# 's3.config.label' specifies the label/branch directory (e.g., 'my-service/main/').
+s3.config.label=main
+
+# Example of a local default property.
+# If a 'message' property is found in S3 (which has higher precedence due to the
+# EnvironmentPostProcessor adding its PropertySource first), it will override this value.
+message=This is a local default message from application.properties.
+```
+# my-service-direct-s3/src/main/resources/META-INF/spring.factories
+# This file is a Spring Boot convention that allows you to register
+# EnvironmentPostProcessor implementations.
+# Spring Boot automatically discovers and invokes classes listed here
+# very early in the application lifecycle, before the main application
+# context is fully configured.
+
+# Register our custom S3EnvironmentPostProcessor.
+# The fully qualified class name of your EnvironmentPostProcessor implementation.
+org.springframework.boot.env.EnvironmentPostProcessor=com.example.myservicedirects3.S3EnvironmentPostProcessor
