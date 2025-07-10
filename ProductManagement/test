@@ -1,0 +1,251 @@
+import org.springframework.cloud.bootstrap.config.PropertySourceLocator;
+import org.springframework.core.env.CompositePropertySource;
+import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.io.ByteArrayResource;
+import org.yaml.snakeyaml.Yaml;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.core.sync.ResponseInputStream;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+
+import java.io.IOException;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
+import java.util.stream.Collectors;
+
+/**
+ * Custom PropertySourceLocator to load configurations directly from AWS S3.
+ * This class implements Spring Cloud's PropertySourceLocator interface, allowing it
+ * to be discovered and invoked during the Spring Boot bootstrap phase (before the
+ * main application context is fully initialized). This is where external properties
+ * are typically loaded.
+ */
+public class S3PropertySourceLocator implements PropertySourceLocator {
+
+    // Define property keys that will be used to configure this locator from application.properties
+    private static final String S3_BUCKET_NAME_PROPERTY = "s3.config.bucket-name";
+    private static final String S3_REGION_PROPERTY = "s3.config.region";
+    private static final String APPLICATION_NAME_PROPERTY = "spring.application.name";
+    private static final String ACTIVE_PROFILES_PROPERTY = "spring.profiles.active";
+    private static final String CONFIG_LABEL_PROPERTY = "s3.config.label"; // Custom property for label
+
+    /**
+     * This method is called by Spring Boot during the bootstrap phase.
+     * It's responsible for locating and returning one or more PropertySource objects
+     * that contain external configuration.
+     *
+     * @param environment The current Spring Environment, which contains properties
+     * already loaded (e.g., from application.properties, system properties, env vars).
+     * @return A PropertySource containing the loaded S3 configurations, or null if no
+     * configurations are found or an error occurs.
+     */
+    @Override
+    public org.springframework.core.env.PropertySource<?> locate(Environment environment) {
+        // Ensure we're working with a ConfigurableEnvironment to access properties
+        if (!(environment instanceof ConfigurableEnvironment)) {
+            System.err.println("S3PropertySourceLocator: Environment is not ConfigurableEnvironment. Cannot load S3 config.");
+            return null;
+        }
+        ConfigurableEnvironment configurableEnvironment = (ConfigurableEnvironment) environment;
+
+        // Retrieve necessary configuration parameters from the current environment.
+        // These parameters are expected to be set in application.properties or via command line/env vars.
+        String bucketName = configurableEnvironment.getProperty(S3_BUCKET_NAME_PROPERTY);
+        String regionName = configurableEnvironment.getProperty(S3_REGION_PROPERTY);
+        String applicationName = configurableEnvironment.getProperty(APPLICATION_NAME_PROPERTY);
+        // Get active profiles. If none specified, default to "default".
+        String profile = configurableEnvironment.getProperty(ACTIVE_PROFILES_PROPERTY, "default");
+        // Get the configuration label. If none specified, default to "main".
+        String label = configurableEnvironment.getProperty(CONFIG_LABEL_PROPERTY, "main");
+
+        // Basic validation for required properties
+        if (bucketName == null || regionName == null || applicationName == null) {
+            System.err.println("S3PropertySourceLocator: Missing required S3 config properties " +
+                               "(s3.config.bucket-name, s3.config.region, spring.application.name). Skipping S3 config load.");
+            return null;
+        }
+
+        System.out.println(String.format("S3PropertySourceLocator: Attempting to load config for app='%s', profile='%s', label='%s' from S3 bucket '%s' in region '%s'",
+                applicationName, profile, label, bucketName, regionName));
+
+        // CompositePropertySource allows us to combine multiple property sources.
+        // Properties from sources added first will have higher precedence.
+        CompositePropertySource composite = new CompositePropertySource("s3-config-properties");
+
+        S3Client s3Client = null; // Declare S3Client outside try-catch for finally block
+
+        try {
+            // Initialize S3 client with the specified region.
+            // AWS SDK will automatically use default credential provider chain (env vars, ~/.aws/credentials, EC2 instance profile, etc.)
+            s3Client = S3Client.builder()
+                    .region(Region.of(regionName))
+                    .build();
+
+            // Define potential S3 object keys (file paths) to try, in order of desired precedence.
+            // More specific paths (with profile and label) are tried first.
+            // This mimics the behavior of Spring Cloud Config Server's search paths.
+            String[] pathsToTry = {
+                // 1. {application}/{label}/{application}-{profile}.yml (most specific)
+                String.format("%s/%s/%s-%s.yml", applicationName, label, applicationName, profile),
+                // 2. {application}/{label}/{application}-{profile}.properties
+                String.format("%s/%s/%s-%s.properties", applicationName, label, applicationName, profile),
+                // 3. {application}/{label}/application.yml (common for label)
+                String.format("%s/%s/application.yml", applicationName, label),
+                // 4. {application}/{label}/application.properties
+                String.format("%s/%s/application.properties", applicationName, label),
+                // 5. {application}/{application}-{profile}.yml (fallback without label directory)
+                String.format("%s/%s-%s.yml", applicationName, applicationName, profile),
+                // 6. {application}/{application}-{profile}.properties
+                String.format("%s/%s-%s.properties", applicationName, applicationName, profile),
+                // 7. {application}/application.yml (common for application, no label)
+                String.format("%s/application.yml", applicationName),
+                // 8. {application}/application.properties
+                String.format("%s/application.properties", applicationName)
+            };
+
+            // Iterate through the paths and try to load configuration from S3
+            for (String path : pathsToTry) {
+                try (ResponseInputStream<GetObjectResponse> s3Object = s3Client.getObject(GetObjectRequest.builder()
+                        .bucket(bucketName)
+                        .key(path)
+                        .build())) {
+
+                    byte[] contentBytes = s3Object.readAllBytes();
+                    String fileContent = new String(contentBytes);
+
+                    Map<String, Object> properties = new HashMap<>();
+                    if (path.endsWith(".yml")) {
+                        // Use SnakeYAML to parse YAML content
+                        Yaml yaml = new Yaml();
+                        Map<String, Object> yamlMap = yaml.load(fileContent);
+                        // Flatten the nested YAML map into a flat Map<String, Object>
+                        // suitable for MapPropertySource.
+                        flattenYamlMap(yamlMap, "", properties);
+                    } else if (path.endsWith(".properties")) {
+                        // Use PropertiesLoaderUtils to parse .properties content
+                        Properties props = new Properties();
+                        props.load(new ByteArrayResource(contentBytes).getInputStream());
+                        // Convert Properties to Map<String, Object>
+                        properties = props.entrySet().stream()
+                                .collect(Collectors.toMap(
+                                        e -> String.valueOf(e.getKey()),
+                                        Map.Entry::getValue
+                                ));
+                    }
+
+                    if (!properties.isEmpty()) {
+                        // Add the loaded properties as a new PropertySource to the composite.
+                        // 'addFirstPropertySource' ensures that properties from earlier paths
+                        // (more specific ones) take precedence over later ones.
+                        System.out.println("S3PropertySourceLocator: Successfully loaded properties from: " + path);
+                        composite.addFirstPropertySource(new MapPropertySource(path, properties));
+                    }
+                } catch (S3Exception e) {
+                    if (e.statusCode() == 404) {
+                        // Object not found in S3, which is expected for some paths; continue to the next.
+                        // System.out.println("S3PropertySourceLocator: File not found: " + path); // Uncomment for verbose logging
+                    } else {
+                        // Other S3 access errors (permissions, etc.)
+                        System.err.println("S3PropertySourceLocator: Error accessing S3 file " + path + ": " + e.getMessage());
+                        // Optionally, rethrow if you want the application to fail fast on S3 access issues
+                        // throw new RuntimeException("Failed to access S3 config: " + path, e);
+                    }
+                } catch (IOException e) {
+                    // Error reading content from S3 stream or parsing file content
+                    System.err.println("S3PropertySourceLocator: Error reading or parsing file " + path + ": " + e.getMessage());
+                    // Optionally, rethrow
+                    // throw new RuntimeException("Failed to parse S3 config file: " + path, e);
+                }
+            }
+
+        } catch (Exception e) {
+            // Catch any exceptions during S3 client initialization or general process
+            System.err.println("S3PropertySourceLocator: Failed to initialize S3 client or load properties: " + e.getMessage());
+            // If configuration from S3 is critical for your application to start,
+            // you might want to throw a RuntimeException here to prevent startup.
+            // throw new RuntimeException("Critical: Failed to load S3 configuration at startup", e);
+        } finally {
+            // Ensure the S3 client is closed to release resources.
+            if (s3Client != null) {
+                s3Client.close();
+            }
+        }
+
+        // Return the composite property source if it contains any properties, otherwise null.
+        // If null is returned, Spring Boot will continue with its default property sources.
+        return composite.getPropertySources().isEmpty() ? null : composite;
+    }
+
+    /**
+     * Helper method to flatten a nested YAML map into a single-level map
+     * with dot-separated keys (e.g., "parent.child.property").
+     * This makes it compatible with Spring's PropertySource mechanism.
+     *
+     * @param yamlMap The current map to flatten.
+     * @param prefix The prefix for keys (accumulated from parent keys).
+     * @param target The target map where flattened properties are stored.
+     */
+    private void flattenYamlMap(Map<String, Object> yamlMap, String prefix, Map<String, Object> target) {
+        if (yamlMap == null) {
+            return;
+        }
+        yamlMap.forEach((key, value) -> {
+            // Construct the new key with the prefix
+            String newKey = prefix.isEmpty() ? key : prefix + "." + key;
+            if (value instanceof Map) {
+                // If the value is another map, recursively flatten it
+                flattenYamlMap((Map<String, Object>) value, newKey, target);
+            } else if (value instanceof java.util.Collection) {
+                // Handle collections (lists). Convert them to a string representation
+                // or handle them based on your specific needs. For simplicity, we'll
+                // just convert to string. More complex handling might involve
+                // `newKey[index]` for array elements.
+                target.put(newKey, value.toString());
+            }
+            else {
+                // Otherwise, it's a simple key-value pair, add to the target map
+                target.put(newKey, value);
+            }
+        });
+    }
+}
+```properties
+# my-service-direct-s3/src/main/resources/application.properties
+# This file contains the application's local default configuration
+# and the parameters needed by our custom S3PropertySourceLocator.
+
+server.port=8080 # The port on which this Spring Boot application will run
+
+# S3 Configuration for the custom PropertySourceLocator
+# IMPORTANT: Replace 'my-spring-config-bucket' with your actual S3 bucket name.
+s3.config.bucket-name=my-spring-config-bucket
+# IMPORTANT: Replace 'eu-west-2' with your S3 bucket's AWS region.
+s3.config.region=eu-west-2
+
+# Application identification for S3 config lookup.
+# This 'spring.application.name' will be used to form the S3 path (e.g., 'my-service/').
+spring.application.name=my-service
+# The active profile. This will be used to form the S3 path (e.g., 'my-service-dev.yml').
+spring.profiles.active=dev
+# The configuration label (e.g., 'main', 'develop', 'feature-X').
+# This will be used to form the S3 path (e.g., 'my-service/main/').
+s3.config.label=main
+
+# Example of a local default property.
+# If a 'message' property is found in S3, it will override this value.
+message=This is a local default message from application.properties.
+```
+# my-service-direct-s3/src/main/resources/META-INF/spring.factories
+# This file is a Spring Boot convention that allows you to register
+# bootstrap components like PropertySourceLocator.
+# When Spring Boot starts, it looks for this file to find classes
+# that should be initialized very early in the application lifecycle.
+
+# Register our custom S3PropertySourceLocator
+org.springframework.cloud.bootstrap.config.PropertySourceLocator=com.example.myservicedirects3.S3PropertySourceLocator
