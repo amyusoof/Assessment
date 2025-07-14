@@ -1,0 +1,115 @@
+# .gitlab-ci.yml
+
+# This pipeline demonstrates how to iterate over an array of environment variables
+# and create a step (job) for each element in the array.
+
+# Define a list of environment names. This can be any array of strings.
+# For example, these could represent different deployment environments,
+# configurations, or test suites.
+variables:
+  ENVIRONMENTS: "dev,staging,prod" # Comma-separated string of environments
+
+# Define a hidden job template. Jobs starting with a dot are not directly
+# executed but can be extended by other jobs. This helps in reusing common
+# configurations.
+.deploy_template:
+  # Use a base image for the job. Alpine is lightweight.
+  image: alpine/git:latest
+  # Define the script that will be executed for each job.
+  # $CI_JOB_NAME will contain the name of the job (e.g., deploy:dev, deploy:staging).
+  # $ENVIRONMENT will be the specific environment variable for the current iteration.
+  script:
+    - echo "--- Starting deployment for environment: $ENVIRONMENT ---"
+    - echo "Simulating deployment steps for $ENVIRONMENT..."
+    - echo "Current job name: $CI_JOB_NAME"
+    # Add your actual deployment commands here.
+    # For example:
+    # - ansible-playbook deploy.yml -e env=$ENVIRONMENT
+    # - kubectl apply -f k8s/$ENVIRONMENT.yaml
+    - echo "Deployment to $ENVIRONMENT completed successfully."
+  # Define the stage for this job.
+  stage: deploy
+  # Define when this job should run. Here, it runs on the 'main' branch.
+  only:
+    - main
+
+# Dynamically generate jobs based on the ENVIRONMENTS variable.
+# This uses a GitLab CI/CD feature called "dynamic child pipelines" or
+# "generated configuration".
+# However, for a simple iteration over a predefined list, we can use a
+# combination of `rules` and `variables` to achieve a similar effect
+# without needing a separate child pipeline.
+
+# A more direct way to iterate and create jobs for each item in the ENVIRONMENTS
+# variable is to use a matrix strategy, which is not directly supported for
+# simple string splitting in the same way as some other CI tools.
+# The most common GitLab CI approach for this is to use a script to generate
+# a dynamic child pipeline configuration, or to explicitly define jobs
+# if the list is small and static.
+
+# Given the request to "iterate and create each step for array",
+# the most straightforward way in GitLab CI for a fixed list is to define
+# individual jobs that leverage a template, or to use a generator script
+# for larger, dynamic lists.
+
+# Option 1: Explicitly defining jobs (simpler for small, fixed lists)
+# This approach defines a separate job for each environment, extending the template.
+# This does not "iterate" in the sense of a loop, but achieves the desired outcome
+# of having a distinct step for each environment.
+
+deploy_dev:
+  extends: .deploy_template
+  variables:
+    ENVIRONMENT: "dev" # Override the ENVIRONMENT variable for this specific job
+
+deploy_staging:
+  extends: .deploy_template
+  variables:
+    ENVIRONMENT: "staging" # Override the ENVIRONMENT variable for this specific job
+
+deploy_prod:
+  extends: .deploy_template
+  variables:
+    ENVIRONMENT: "prod" # Override the ENVIRONMENT variable for this specific job
+
+# Option 2 (More advanced: Generating dynamic child pipelines for true iteration)
+# For truly dynamic iteration where the list of environments might change frequently
+# or be very large, you would typically use a script to generate a child pipeline
+# configuration. This is more complex and usually involves a separate job
+# that generates a .gitlab-ci-child.yml file, which is then included.
+
+# Example of how you might generate a child pipeline (conceptual, not runnable directly here):
+# generate_child_pipeline:
+#   stage: build
+#   image: python:latest # Or a shell with necessary tools
+#   script:
+#     - |
+#       echo "Generating dynamic child pipeline..."
+#       # Split the ENVIRONMENTS variable and generate YAML for each
+#       echo "stages:" > generated-child-pipeline.yml
+#       echo "  - deploy" >> generated-child-pipeline.yml
+#       IFS=',' read -ra ADDR <<< "$ENVIRONMENTS"
+#       for i in "${ADDR[@]}"; do
+#         echo "" >> generated-child-pipeline.yml
+#         echo "deploy_$i:" >> generated-child-pipeline.yml
+#         echo "  extends: .deploy_template" >> generated-child-pipeline.yml
+#         echo "  variables:" >> generated-child-pipeline.yml
+#         echo "    ENVIRONMENT: \"$i\"" >> generated-child-pipeline.yml
+#       done
+#   artifacts:
+#     paths:
+#       - generated-child-pipeline.yml
+#   only:
+#     - main
+
+# include:
+#   - project: '$CI_PROJECT_PATH'
+#     file: generated-child-pipeline.yml
+#     ref: '$CI_COMMIT_SHA'
+#   needs:
+#     - generate_child_pipeline
+
+# For this specific request, "Option 1" (explicitly defining jobs extending a template)
+# is the most direct and common way to achieve distinct steps for a predefined array
+# of environment variables in GitLab CI without resorting to complex dynamic pipeline
+# generation unless explicitly required by the scale or dynamism of the array.
