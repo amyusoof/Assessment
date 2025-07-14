@@ -9,35 +9,35 @@ stages:
   - generate_ci
   - trigger_child
 
-# --- Stage 1: Generate a dynamic list of items ---
-# This job simulates generating a list of microservices.
+# --- Stage 1: Generate a dynamic list of environments ---
+# This job simulates generating a list of environments.
 # In a real scenario, this could involve:
-# - Listing directories: `ls -d services/*/ | sed 's/services\///;s/\///'`
-# - Calling an API: `curl ... | jq ...`
-# - Reading from a database, etc.
-generate-microservice-list:
+# - Querying an environment management system
+# - Reading a configuration file
+# - Listing branches that correspond to environments
+generate-environment-list:
   stage: generate_list
   script:
-    - echo "Generating dynamic list of microservices..."
-    # Simulate generating a JSON array of objects
-    # Each object represents a microservice with a name and a version
+    - echo "Generating dynamic list of environments..."
+    # Simulate generating a JSON array of objects, each representing an environment
+    # We include 'name' and a 'base_url' for demonstration purposes.
     - |
-      cat <<EOF > microservices.json
+      cat <<EOF > environments.json
       [
-        { "name": "user-service", "version": "1.0.0" },
-        { "name": "product-catalog-service", "version": "1.2.1" },
-        { "name": "order-processing-service", "version": "2.0.0" }
+        { "name": "development", "base_url": "https://dev.example.com", "credentials_secret": "DEV_API_KEY" },
+        { "name": "staging", "base_url": "https://staging.example.com", "credentials_secret": "STAGING_API_KEY" },
+        { "name": "production", "base_url": "https://prod.example.com", "credentials_secret": "PROD_API_KEY" }
       ]
       EOF
-    - echo "Generated microservices.json:"
-    - cat microservices.json
+    - echo "Generated environments.json:"
+    - cat environments.json
   artifacts:
     paths:
-      - microservices.json # Make the generated JSON file available to subsequent jobs
+      - environments.json # Make the generated JSON file available to subsequent jobs
     expire_in: 1 hour # Keep artifact for a short period
 
-# --- Stage 2: Generate the child .gitlab-ci.yml based on the dynamic list ---
-# This job reads the microservices.json and constructs the child CI file.
+# --- Stage 2: Generate the child .gitlab-ci.yml based on the dynamic environment list ---
+# This job reads the environments.json and constructs the child CI file.
 # We use `jq` to parse the JSON and format it into YAML for GitLab CI jobs.
 generate-child-ci-config:
   stage: generate_ci
@@ -45,39 +45,44 @@ generate-child-ci-config:
     name: "mikefarah/yq" # A great tool for YAML processing, similar to jq for JSON
     entrypoint: ["/usr/bin/env", "bash"] # Ensure bash is used for the script
   script:
-    - echo "Generating child CI configuration..."
-    # Ensure jq is installed if not using yq for full JSON processing
-    # If using yq, it can also process JSON
+    - echo "Generating child CI configuration for environments..."
     - apk add --no-cache jq # Install jq if not already present in the image
+
+    # Start with the basic structure of the child CI file
     - |
-      # Start with the basic structure of the child CI file
-      echo "build_microservice_template:" > child-pipeline.yml
-      echo "  stage: build" >> child-pipeline.yml
+      echo "deploy_environment_template:" > child-pipeline.yml
+      echo "  stage: deploy" >> child-pipeline.yml
+      echo "  image: curlimages/curl:latest # Or a deployment specific image" >> child-pipeline.yml
       echo "  script:" >> child-pipeline.yml
-      echo "    - echo \"Building \${MICROSERVICE_NAME} version \${MICROSERVICE_VERSION}\"" >> child-pipeline.yml
-      echo "    - echo \"Running build commands for \${MICROSERVICE_NAME}...\"" >> child-pipeline.yml
-      echo "    - sleep 5" >> child-pipeline.yml
-      echo "    - echo \"Build completed for \${MICROSERVICE_NAME}\"" >> child-pipeline.yml
+      echo "    - echo \"Deploying to environment: \${ENV_NAME}\"" >> child-pipeline.yml
+      echo "    - echo \"Using base URL: \${ENV_BASE_URL}\"" >> child-pipeline.yml
+      echo "    - echo \"Fetching credentials from secret: \${ENV_CREDENTIALS_SECRET}\"" >> child-pipeline.yml
+      echo "    - echo \"Simulating deployment to \${ENV_NAME}...\"" >> child-pipeline.yml
+      echo "    - sleep 10" >> child-pipeline.yml
+      echo "    - echo \"Deployment to \${ENV_NAME} completed.\"" >> child-pipeline.yml
+      echo "  environment:" >> child-pipeline.yml # Define environment for GitLab UI
+      echo "    name: \${ENV_NAME}" >> child-pipeline.yml
+      echo "    url: \${ENV_BASE_URL}" >> child-pipeline.yml
       echo "" >> child-pipeline.yml # Add a newline for separation
 
-      # Now, iterate over the microservices.json using jq to create parallel jobs
-      # This creates a 'build' job for each microservice, using the template
-      # and setting specific variables for each instance.
-      jq -c '.[]' microservices.json | while read i; do
-        MICROSERVICE_NAME=$(echo "$i" | jq -r '.name')
-        MICROSERVICE_VERSION=$(echo "$i" | jq -r '.version')
-        JOB_NAME="build-${MICROSERVICE_NAME//-/_}" # Replace hyphens for valid job names
+    # Now, iterate over the environments.json using jq to create parallel deploy jobs
+    jq -c '.[]' environments.json | while read i; do
+      ENV_NAME=$(echo "$i" | jq -r '.name')
+      ENV_BASE_URL=$(echo "$i" | jq -r '.base_url')
+      ENV_CREDENTIALS_SECRET=$(echo "$i" | jq -r '.credentials_secret')
+      JOB_NAME="deploy-${ENV_NAME//-/_}" # Replace hyphens for valid job names
 
-        echo "${JOB_NAME}:" >> child-pipeline.yml
-        echo "  extends: build_microservice_template" >> child-pipeline.yml
-        echo "  variables:" >> child-pipeline.yml
-        echo "    MICROSERVICE_NAME: \"${MICROSERVICE_NAME}\"" >> child-pipeline.yml
-        echo "    MICROSERVICE_VERSION: \"${MICROSERVICE_VERSION}\"" >> child-pipeline.yml
-        echo "  # Optional: Add specific rules or tags for this dynamic job" >> child-pipeline.yml
-        echo "  # rules:" >> child-pipeline.yml
-        echo "  #   - if: \$CI_COMMIT_BRANCH == \$CI_DEFAULT_BRANCH" >> child-pipeline.yml
-        echo "" >> child-pipeline.yml # Add a newline for separation
-      done
+      echo "${JOB_NAME}:" >> child-pipeline.yml
+      echo "  extends: deploy_environment_template" >> child-pipeline.yml
+      echo "  variables:" >> child-pipeline.yml
+      echo "    ENV_NAME: \"${ENV_NAME}\"" >> child-pipeline.yml
+      echo "    ENV_BASE_URL: \"${ENV_BASE_URL}\"" >> child-pipeline.yml
+      echo "    ENV_CREDENTIALS_SECRET: \"${ENV_CREDENTIALS_SECRET}\"" >> child-pipeline.yml
+      echo "  # Optional: Add specific rules, tags, or dependencies for this dynamic job" >> child-pipeline.yml
+      echo "  # rules:" >> child-pipeline.yml
+      echo "  #   - if: \$CI_COMMIT_BRANCH == \$CI_DEFAULT_BRANCH" >> child-pipeline.yml
+      echo "" >> child-pipeline.yml # Add a newline for separation
+    done
 
     - echo "Generated child-pipeline.yml:"
     - cat child-pipeline.yml
@@ -86,7 +91,7 @@ generate-child-ci-config:
       - child-pipeline.yml # Make the generated CI file available
     expire_in: 1 hour
   needs:
-    - generate-microservice-list # Ensure this job runs after the list is generated
+    - generate-environment-list # Ensure this job runs after the list is generated
 
 # --- Stage 3: Trigger the child pipeline ---
 # This job triggers the dynamically generated child-pipeline.yml.
