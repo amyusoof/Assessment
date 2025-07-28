@@ -1,0 +1,182 @@
+package com.example.util;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * A utility class to read YAML content from a file or InputStream
+ * and flatten its nested structure into a single-level map
+ * using dot-notation for keys.
+ * This is useful for processing YAML files where a flat key-value
+ * representation is desired, similar to how properties are handled
+ * in many configuration systems.
+ */
+public class YamlFlattener {
+
+    private final ObjectMapper objectMapper;
+
+    /**
+     * Constructs a YamlFlattener with a default Jackson ObjectMapper
+     * configured for YAML processing.
+     */
+    public YamlFlattener() {
+        this.objectMapper = new ObjectMapper(new YAMLFactory());
+    }
+
+    /**
+     * Constructs a YamlFlattener with a custom ObjectMapper.
+     * Use this if you need specific Jackson configurations (e.g., custom modules).
+     *
+     * @param objectMapper The ObjectMapper to use for YAML parsing. It must be
+     * configured with a YAMLFactory.
+     * @throws IllegalArgumentException if the provided ObjectMapper is not
+     * configured with a YAMLFactory.
+     */
+    public YamlFlattener(ObjectMapper objectMapper) {
+        if (!(objectMapper.getFactory() instanceof YAMLFactory)) {
+            throw new IllegalArgumentException("ObjectMapper must be configured with a YAMLFactory.");
+        }
+        this.objectMapper = objectMapper;
+    }
+
+    /**
+     * Reads a YAML file from the given file path and flattens its content.
+     *
+     * @param filePath The absolute or relative path to the YAML file.
+     * @return A flattened map where keys use dot-notation for nested structures.
+     * The map maintains insertion order for properties.
+     * @throws IOException If the file does not exist, cannot be read, or
+     * if there's an error parsing the YAML content.
+     */
+    public Map<String, Object> flattenYamlFromFile(String filePath) throws IOException {
+        File file = new File(filePath);
+        if (!file.exists() || !file.isFile() || !file.canRead()) {
+            throw new IOException("Cannot read file or file does not exist: " + filePath);
+        }
+        try (InputStream inputStream = new FileInputStream(file)) {
+            return flattenYamlFromStream(inputStream);
+        }
+    }
+
+    /**
+     * Reads YAML content from the given InputStream and flattens it.
+     *
+     * @param inputStream The InputStream containing YAML content.
+     * @return A flattened map where keys use dot-notation for nested structures.
+     * The map maintains insertion order for properties.
+     * @throws IOException If an I/O error occurs while reading the stream or
+     * if there's an error parsing the YAML content.
+     */
+    public Map<String, Object> flattenYamlFromStream(InputStream inputStream) throws IOException {
+        // Read the YAML into a nested Map structure
+        // Jackson will automatically handle the YAML parsing based on YAMLFactory
+        Map<String, Object> nestedMap = objectMapper.readValue(inputStream, Map.class);
+        return flatten(nestedMap);
+    }
+
+    /**
+     * Flattens a nested Map representation (like the one parsed from YAML)
+     * into a single-level Map with dot-notation keys.
+     *
+     * @param source The nested map to flatten.
+     * @return A new Map containing flattened key-value pairs.
+     */
+    public Map<String, Object> flatten(Map<String, Object> source) {
+        // Using LinkedHashMap to preserve the order of properties as they appear in the YAML
+        Map<String, Object> flatMap = new LinkedHashMap<>();
+        flattenRecursive(source, flatMap, null);
+        return flatMap;
+    }
+
+    /**
+     * Recursive helper method to perform the flattening.
+     *
+     * @param source The current nested map being processed.
+     * @param target The flattened map being built.
+     * @param parentKey The prefix for the current keys (null for top-level).
+     */
+    private void flattenRecursive(Map<String, Object> source, Map<String, Object> target, String parentKey) {
+        source.forEach((key, value) -> {
+            // Construct the full key for the current property
+            String currentKey = (parentKey != null) ? parentKey + "." + key : key;
+
+            if (value instanceof Map) {
+                // If the value is another map, recurse to flatten it
+                flattenRecursive((Map<String, Object>) value, target, currentKey);
+            } else if (value instanceof java.util.Collection) {
+                // If the value is a list or collection, store its string representation.
+                // For more advanced handling of lists (e.g., indexed keys like 'list[0]'),
+                // this logic would need to be expanded.
+                target.put(currentKey, value.toString());
+            } else {
+                // Otherwise, it's a scalar value (String, Number, Boolean, etc.), add it directly
+                target.put(currentKey, value);
+            }
+        });
+    }
+}
+
+
+
+package com.example.util;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.Map;
+
+public class YamlFlattenerDemo {
+
+    public static void main(String[] args) {
+        YamlFlattener flattener = new YamlFlattener();
+
+        // Determine the path to your test YAML file
+        String yamlFilePath;
+        try {
+            // Try to get the file path from classpath (typical for Maven/Gradle projects)
+            File fileInResources = new File(
+                YamlFlattenerDemo.class.getClassLoader().getResource("test-config.yml").getFile()
+            );
+            yamlFilePath = fileInResources.getAbsolutePath();
+        } catch (NullPointerException e) {
+            // Fallback if not found in classpath (e.g., if running from a different directory)
+            System.err.println("Warning: 'test-config.yml' not found in classpath. Attempting to use current directory.");
+            yamlFilePath = "test-config.yml"; // Assumes it's in the current working directory
+        }
+
+        System.out.println("Attempting to read and flatten YAML from: " + yamlFilePath);
+
+        try {
+            // Call the flattenYamlFromFile method
+            Map<String, Object> flattenedProperties = flattener.flattenYamlFromFile(yamlFilePath);
+
+            System.out.println("\n--- Flattened YAML Properties ---");
+            if (flattenedProperties.isEmpty()) {
+                System.out.println("No properties found or file was empty.");
+            } else {
+                flattenedProperties.forEach((key, value) -> {
+                    System.out.println(key + " = " + value);
+                });
+            }
+
+            // Demonstrating access to some specific flattened properties
+            System.out.println("\n--- Verifying Specific Properties ---");
+            System.out.println("application.name: " + flattenedProperties.get("application.name"));
+            System.out.println("application.config.database.port: " + flattenedProperties.get("application.config.database.port"));
+            System.out.println("features.enabled: " + flattenedProperties.get("features.enabled"));
+            System.out.println("features.list: " + flattenedProperties.get("features.list")); // Will be a string representation of the list
+            System.out.println("features.settings.timeout: " + flattenedProperties.get("features.settings.timeout"));
+
+        } catch (IOException e) {
+            System.err.println("Error reading or flattening YAML file: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
+
