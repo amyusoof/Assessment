@@ -1,3 +1,4 @@
+mvn clean compile exec:java -Dexec.mainClass="com.example.util.YamlFlattenerDemo"
 package com.example.util;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
