@@ -1,4 +1,29 @@
 mvn clean compile exec:java -Dexec.mainClass="com.example.util.YamlFlattenerDemo"
+
+
+ <!-- ADD THIS PLUGIN CONFIGURATION -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>${exec.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <!--
+                <configuration>
+                    <mainClass>com.example.util.YamlFlattenerDemo</mainClass>
+                </configuration>
+                You can specify mainClass here, but using -Dexec.mainClass on the command line
+                gives you more flexibility to run different main classes without changing pom.xml.
+                So, we'll keep it commented out to rely on the command line property.
+                -->
+            </plugin>
+
+
 package com.example.util;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
