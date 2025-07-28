@@ -1,0 +1,95 @@
+// src/main/java/com/example/config/S3YamlEnvironmentPostProcessor.java
+package com.example.config;
+
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.model.S3Object;
+import com.amazonaws.services.s3.model.S3ObjectInputStream;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.env.EnvironmentPostProcessor;
+import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.PropertySource;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.Resource;
+import org.springframework.util.StreamUtils;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
+public class S3YamlEnvironmentPostProcessor implements EnvironmentPostProcessor {
+
+    private static final String S3_BUCKET_PROPERTY = "s3.config.bucket";
+    private static final String S3_KEY_PROPERTY = "s3.config.key";
+    private static final String AWS_REGION_PROPERTY = "aws.region"; // Optional, can be auto-discovered
+
+    private final YamlPropertySourceLoader yamlLoader = new YamlPropertySourceLoader();
+
+    @Override
+    public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+        String s3Bucket = environment.getProperty(S3_BUCKET_PROPERTY);
+        String s3Key = environment.getProperty(S3_KEY_PROPERTY);
+        String awsRegion = environment.getProperty(AWS_REGION_PROPERTY);
+
+        if (s3Bucket == null || s3Key == null) {
+            System.out.println("S3 config properties ('" + S3_BUCKET_PROPERTY + "', '" + S3_KEY_PROPERTY + "') not set. Skipping S3 YAML loading.");
+            return;
+        }
+
+        AmazonS3 s3Client = null;
+        try {
+            if (awsRegion != null) {
+                s3Client = AmazonS3ClientBuilder.standard()
+                        .withRegion(awsRegion)
+                        .build();
+            } else {
+                s3Client = AmazonS3ClientBuilder.defaultClient(); // Uses default region provider chain
+            }
+
+            System.out.println("Attempting to load YAML from S3: bucket=" + s3Bucket + ", key=" + s3Key + ", region=" + (awsRegion != null ? awsRegion : "default"));
+
+            // Check if the object exists before trying to get it
+            if (!s3Client.doesObjectExist(s3Bucket, s3Key)) {
+                System.err.println("S3 object does not exist: s3://" + s3Bucket + "/" + s3Key);
+                return;
+            }
+
+            S3Object s3Object = s3Client.getObject(s3Bucket, s3Key);
+            try (S3ObjectInputStream s3is = s3Object.getObjectContent()) {
+                String yamlContent = StreamUtils.copyToString(s3is, StandardCharsets.UTF_8);
+
+                // Create a Resource from the S3 content
+                Resource s3Resource = new ByteArrayResource(yamlContent.getBytes(StandardCharsets.UTF_8), "s3-yaml-config");
+
+                // Use Spring Boot's YamlPropertySourceLoader to load and flatten the YAML
+                List<PropertySource<?>> propertySources = yamlLoader.load("s3YamlConfig", s3Resource);
+
+                if (!propertySources.isEmpty()) {
+                    // Add each property source found in the YAML (Spring Boot handles multiple docs)
+                    for (PropertySource<?> ps : propertySources) {
+                        environment.getPropertySources().addLast(ps); // Add last for higher precedence
+                        System.out.println("Successfully loaded and added S3 YAML config PropertySource: " + ps.getName());
+                    }
+                } else {
+                    System.out.println("S3 YAML file was empty or resulted in no properties.");
+                }
+
+            }
+        } catch (IOException e) {
+            System.err.println("Error reading YAML content from S3: " + e.getMessage());
+            // Optionally rethrow if you want the application to fail on this error
+            // throw new RuntimeException("Failed to load S3 YAML config", e);
+        } catch (com.amazonaws.services.s3.model.AmazonS3Exception e) {
+            System.err.println("AWS S3 error while loading config (Code: " + e.getErrorCode() + ", Message: " + e.getErrorMessage() + "): " + e.getMessage());
+            // Common errors: Access Denied, NoSuchKey
+        } catch (Exception e) { // Catch broader exceptions from S3 client or loader
+            System.err.println("Unexpected error during S3 YAML loading process: " + e.getMessage());
+            // throw new RuntimeException("Unexpected error during S3 YAML loading", e);
+        } finally {
+            if (s3Client != null) {
+                s3Client.shutdown(); // Important to shut down the client
+            }
+        }
+    }
+}
