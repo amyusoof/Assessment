@@ -1,3 +1,7 @@
+
+https://g.co/gemini/share/75731a62d9fc
+
+
 Okay, I'll provide a Java code example to match the logic of checking if a given routingCode is present within the routingCode list associated with a marketInfra in your provided YAML structure.
 
 First, let's assume you'll parse the YAML into a Java object structure. A common library for this is Jackson.
