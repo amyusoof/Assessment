@@ -1,1 +1,304 @@
+in a Spring Boot application is the most common and idiomatic way to handle this kind of setup in Java. Spring Boot makes this much cleaner by automatically binding YAML properties to Java objects using @ConfigurationProperties.
 
+Here's how to adapt the previous code for a Spring Boot application:
+
+1. Update pom.xml
+Ensure you have the spring-boot-starter and spring-boot-configuration-processor (for IDE auto-completion and validation) dependencies.
+
+XML
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.1</version> <relativePath/> </parent>
+    <groupId>com.example</groupId>
+    <artifactId>payment-router</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>payment-router</name>
+    <description>Payment Routing Service</description>
+
+    <properties>
+        <java.version>17</java.version> </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
+2. Create application.yaml
+Place this file in src/main/resources.
+
+YAML
+
+routing:
+  iscloudenabled: true # Set to true or false for testing
+  marketInfra:
+    - XXX:
+        routingCode: "" # Empty routing code for XXX (wildcard)
+    - TXXX:
+        routingCode: bb, dd, ff
+    - ZZZ:
+        routingCode: # Also empty/null like (or just whitespace)
+3. Java Classes for Configuration Binding
+Rename MarketInfraConfig to something more descriptive like RoutingProperties and annotate it with @ConfigurationProperties. MarketInfraDetail remains the same.
+
+src/main/java/com/example/paymentrouter/config/RoutingProperties.java
+
+Java
+
+package com.example.paymentrouter.config;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.Map;
+
+@Component
+@ConfigurationProperties(prefix = "routing") // Binds to the 'routing' prefix in application.yaml
+public class RoutingProperties {
+
+    private Boolean iscloudenabled; // Matches 'iscloudenabled' in YAML
+    private List<Map<String, MarketInfraDetail>> marketInfra; // Matches 'marketInfra' in YAML
+
+    // Getter for iscloudenabled with default
+    public Boolean getIscloudenabled() {
+        return iscloudenabled != null ? iscloudenabled : true; // Default to true if not specified
+    }
+
+    public void setIscloudenabled(Boolean iscloudenabled) {
+        this.iscloudenabled = iscloudenabled;
+    }
+
+    public List<Map<String, MarketInfraDetail>> getMarketInfra() {
+        return marketInfra;
+    }
+
+    public void setMarketInfra(List<Map<String, MarketInfraDetail>> marketInfra) {
+        this.marketInfra = marketInfra;
+    }
+
+    @Override
+    public String toString() {
+        return "RoutingProperties{" +
+               "iscloudenabled=" + iscloudenabled +
+               ", marketInfra=" + marketInfra +
+               '}';
+    }
+
+    // Inner class (or separate file if preferred) for MarketInfraDetail
+    public static class MarketInfraDetail { // Make it static public if in same file
+        private String routingCode;
+
+        public String getRoutingCode() {
+            return routingCode;
+        }
+
+        public void setRoutingCode(String routingCode) {
+            this.routingCode = routingCode;
+        }
+
+        @Override
+        public String toString() {
+            return "MarketInfraDetail{" +
+                   "routingCode='" + routingCode + '\'' +
+                   '}';
+        }
+    }
+}
+4. Update MarketInfraMatcher.java
+This class will now be a Spring @Service (or @Component) and will receive RoutingProperties via constructor injection. It no longer needs to parse YAML directly.
+
+src/main/java/com/example/paymentrouter/service/MarketInfraMatcher.java
+
+Java
+
+package com.example.paymentrouter.service;
+
+import com.example.paymentrouter.config.RoutingProperties;
+import org.springframework.stereotype.Service;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+@Service // Marks this as a Spring service component
+public class MarketInfraMatcher {
+
+    private final RoutingProperties routingProperties;
+
+    // Spring will automatically inject RoutingProperties here
+    public MarketInfraMatcher(RoutingProperties routingProperties) {
+        this.routingProperties = routingProperties;
+    }
+
+    /**
+     * Checks if the given 'routingCode' is present within the routing codes
+     * associated with the specified 'marketInfra'.
+     *
+     * IMPORTANT: If 'iscloudenabled' is false in the YAML, this method will always return false,
+     * regardless of other rules.
+     * If the marketInfra's routingCode in the configuration is empty, it returns true (acts as a wildcard).
+     *
+     * @param marketInfra The market infrastructure identifier (e.g., "XXX", "TXXX").
+     * @param routingCode The routing code to check for.
+     * @return true if the routing code is found for the given market infra, or if the market infra's
+     * routingCode is empty (wildcard), AND 'iscloudenabled' is true. Returns false otherwise.
+     */
+    public boolean doesMarketInfraContainRoutingCode(String marketInfra, String routingCode) {
+        // Global logic: Check iscloudenabled first from the injected properties
+        if (!routingProperties.getIscloudenabled()) {
+            return false;
+        }
+
+        // Proceed with existing logic if isCloudEnabled is true or not explicitly set (defaults to true)
+        if (routingProperties.getMarketInfra() == null) {
+            return false;
+        }
+
+        // Find the specific market infrastructure entry
+        Optional<Map<String, RoutingProperties.MarketInfraDetail>> marketInfraEntry = routingProperties.getMarketInfra().stream()
+                .filter(map -> map.containsKey(marketInfra))
+                .findFirst();
+
+        if (marketInfraEntry.isPresent()) {
+            RoutingProperties.MarketInfraDetail detail = marketInfraEntry.get().get(marketInfra);
+            if (detail != null && detail.getRoutingCode() != null) {
+                String rawRoutingCode = detail.getRoutingCode().trim();
+
+                // If the routingCode is empty or only whitespace, return true (wildcard)
+                if (rawRoutingCode.isEmpty()) {
+                    return true;
+                }
+
+                // Existing logic: Split the comma-separated routing codes and check for existence
+                List<String> codes = Arrays.asList(rawRoutingCode.split(","))
+                                         .stream()
+                                         .map(String::trim) // Trim whitespace from each code
+                                         .collect(Collectors.toList());
+                return codes.contains(routingCode);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Finds the MarketInfra identifier that contains the given routing code.
+     * Useful if you only have a routing code and want to know which MarketInfra it belongs to.
+     *
+     * @param routingCode The routing code to search for.
+     * @return An Optional containing the MarketInfra identifier if found, otherwise empty.
+     */
+    public Optional<String> findMarketInfraByRoutingCode(String routingCode) {
+        // Note: This method does NOT incorporate the 'iscloudenabled' flag as per previous requirement.
+        // If you want it to also respect that flag, add the check here.
+        if (routingProperties.getMarketInfra() == null) {
+            return Optional.empty();
+        }
+
+        for (Map<String, RoutingProperties.MarketInfraDetail> entryMap : routingProperties.getMarketInfra()) {
+            for (Map.Entry<String, RoutingProperties.MarketInfraDetail> entry : entryMap.entrySet()) {
+                String marketInfraName = entry.getKey();
+                RoutingProperties.MarketInfraDetail detail = entry.getValue();
+
+                if (detail != null && detail.getRoutingCode() != null) {
+                    String rawRoutingCode = detail.getRoutingCode().trim();
+                    
+                    if (!rawRoutingCode.isEmpty()) {
+                        List<String> codes = Arrays.asList(rawRoutingCode.split(","))
+                                                 .stream()
+                                                 .map(String::trim)
+                                                 .collect(Collectors.toList());
+                        if (codes.contains(routingCode)) {
+                            return Optional.of(marketInfraName);
+                        }
+                    }
+                }
+            }
+        }
+        return Optional.empty();
+    }
+}
+5. Create Spring Boot Application Entry Point
+src/main/java/com/example/paymentrouter/PaymentRouterApplication.java
+
+Java
+
+package com.example.paymentrouter;
+
+import com.example.paymentrouter.service.MarketInfraMatcher;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+
+@SpringBootApplication
+public class PaymentRouterApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(PaymentRouterApplication.class, args);
+    }
+
+    // This CommandLineRunner is just for demonstration purposes to run logic on startup.
+    // In a real application, you'd inject MarketInfraMatcher into other services/controllers.
+    @Bean
+    public CommandLineRunner run(MarketInfraMatcher matcher) {
+        return args -> {
+            System.out.println("--- Testing Routing Logic from application.yaml ---");
+
+            // Test with iscloudenabled: true (from application.yaml)
+            System.out.println("Does XXX contain 'anyCode'? " + matcher.doesMarketInfraContainRoutingCode("XXX", "anyCode")); // true (wildcard)
+            System.out.println("Does TXXX contain 'dd'? " + matcher.doesMarketInfraContainRoutingCode("TXXX", "dd"));       // true
+            System.out.println("Does TXXX contain 'xx'? " + matcher.doesMarketInfraContainRoutingCode("TXXX", "xx"));       // false
+
+            // You can temporarily change 'iscloudenabled: true' to 'iscloudenabled: false' in application.yaml
+            // to observe the global disable effect.
+            System.out.println("\n(To test iscloudenabled: false, change the value in src/main/resources/application.yaml and restart the application)");
+            System.out.println("Result if 'iscloudenabled' was false: " + matcher.doesMarketInfraContainRoutingCode("XXX", "anyCode")); // This will reflect the actual value from YAML
+        };
+    }
+}
+How to Run:
+Save the files: Ensure they are in the correct package structure as shown above (e.g., com.example.paymentrouter.config, com.example.paymentrouter.service, com.example.paymentrouter).
+
+Place application.yaml: In src/main/resources.
+
+Build with Maven: Open your terminal in the project root and run:
+
+Bash
+
+mvn clean install
+Run the application:
+
+Bash
+
+mvn spring-boot:run
+Spring Boot will automatically load application.yaml, bind the routing properties to your RoutingProperties bean, and then inject that bean into your MarketInfraMatcher service. The CommandLineRunner will execute the test logic when the application starts up.
