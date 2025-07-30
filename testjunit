@@ -1,0 +1,314 @@
+You are absolutely correct\! My apologies, I provided the full code and explanation again instead of just the test case. I will fix that now.
+
+Here is the JUnit 5 test class for `MarketInfraMatcher`, using Mockito to mock the `RoutingProperties`.
+
+Place this file in `src/test/java/com/example/paymentrouter/service/MarketInfraMatcherTest.java` (adjust package as necessary to match your source code).
+
+```java
+package com.example.paymentrouter.service;
+
+import com.example.paymentrouter.config.RoutingProperties;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class MarketInfraMatcherTest {
+
+    @Mock
+    private RoutingProperties routingProperties; // Mock the dependency
+
+    @InjectMocks
+    private MarketInfraMatcher marketInfraMatcher; // Inject mocks into the class under test
+
+    // --- Helper methods to create mock data for RoutingProperties ---
+
+    /**
+     * Creates a list of MarketInfraDetail maps for mocking the configuration.
+     * Each map in the list represents an entry like:
+     * - XXX:
+     * routingCode: "aaa,cc,dd"
+     */
+    private List<Map<String, RoutingProperties.MarketInfraDetail>> createMockMarketInfraList(
+            String infra1Name, String infra1RoutingCode,
+            String infra2Name, String infra2RoutingCode) {
+
+        List<Map<String, RoutingProperties.MarketInfraDetail>> marketInfraList = new ArrayList<>();
+
+        // Infra 1
+        RoutingProperties.MarketInfraDetail detail1 = new RoutingProperties.MarketInfraDetail();
+        detail1.setRoutingCode(infra1RoutingCode);
+        Map<String, RoutingProperties.MarketInfraDetail> map1 = new HashMap<>();
+        map1.put(infra1Name, detail1);
+        marketInfraList.add(map1);
+
+        // Infra 2
+        RoutingProperties.MarketInfraDetail detail2 = new RoutingProperties.MarketInfraDetail();
+        detail2.setRoutingCode(infra2RoutingCode);
+        Map<String, RoutingProperties.MarketInfraDetail> map2 = new HashMap<>();
+        map2.put(infra2Name, detail2);
+        marketInfraList.add(map2);
+
+        return marketInfraList;
+    }
+
+    /**
+     * Creates a single MarketInfraDetail map for mocking the configuration.
+     */
+    private List<Map<String, RoutingProperties.MarketInfraDetail>> createSingleMockMarketInfraList(
+            String infraName, String routingCode) {
+        
+        List<Map<String, RoutingProperties.MarketInfraDetail>> marketInfraList = new ArrayList<>();
+        RoutingProperties.MarketInfraDetail detail = new RoutingProperties.MarketInfraDetail();
+        detail.setRoutingCode(routingCode);
+        Map<String, RoutingProperties.MarketInfraDetail> map = new HashMap<>();
+        map.put(infraName, detail);
+        marketInfraList.add(map);
+        return marketInfraList;
+    }
+
+
+    // --- Test cases for doesMarketInfraContainRoutingCode method ---
+
+    @Test
+    @DisplayName("Should return true when cloud is enabled and routing code explicitly matches")
+    void doesMarketInfraContainRoutingCode_CloudEnabledAndCodeMatches_ReturnsTrue() {
+        // Given: Cloud is enabled, and "XXX" has "aaa" in its routing codes
+        when(routingProperties.getIscloudenabled()).thenReturn(true);
+        when(routingProperties.getMarketInfra()).thenReturn(
+                createMockMarketInfraList("XXX", "aaa,cc,dd", "TXXX", "bb,ff"));
+
+        // When
+        boolean result = marketInfraMatcher.doesMarketInfraContainRoutingCode("XXX", "aaa");
+
+        // Then
+        assertTrue(result);
+    }
+
+    @Test
+    @DisplayName("Should return false when cloud is enabled but routing code does not match")
+    void doesMarketInfraContainRoutingCode_CloudEnabledAndCodeNoMatch_ReturnsFalse() {
+        // Given: Cloud is enabled, but "XXX" does not have "zz" in its routing codes
+        when(routingProperties.getIscloudenabled()).thenReturn(true);
+        when(routingProperties.getMarketInfra()).thenReturn(
+                createMockMarketInfraList("XXX", "aaa,cc,dd", "TXXX", "bb,ff"));
+
+        // When
+        boolean result = marketInfraMatcher.doesMarketInfraContainRoutingCode("XXX", "zz");
+
+        // Then
+        assertFalse(result);
+    }
+
+    @Test
+    @DisplayName("Should return true when cloud is enabled and config routing code is empty (wildcard behavior)")
+    void doesMarketInfraContainRoutingCode_CloudEnabledAndConfigCodeEmpty_ReturnsTrue() {
+        // Given: Cloud is enabled, and "XXX" has an empty routing code (wildcard)
+        when(routingProperties.getIscloudenabled()).thenReturn(true);
+        when(routingProperties.getMarketInfra()).thenReturn(
+                createMockMarketInfraList("XXX", "", "TXXX", "bb,ff")); // XXX has empty routingCode
+
+        // When
+        boolean result = marketInfraMatcher.doesMarketInfraContainRoutingCode("XXX", "anyCode");
+
+        // Then
+        assertTrue(result);
+    }
+
+    @Test
+    @DisplayName("Should return false when cloud is enabled but market infra does not exist in config")
+    void doesMarketInfraContainRoutingCode_CloudEnabledAndInfraNotExist_ReturnsFalse() {
+        // Given: Cloud is enabled, but "NON_EXISTENT" is not in the configured market infra list
+        when(routingProperties.getIscloudenabled()).thenReturn(true);
+        when(routingProperties.getMarketInfra()).thenReturn(
+                createMockMarketInfraList("XXX", "aaa", "TXXX", "bb"));
+
+        // When
+        boolean result = marketInfraMatcher.doesMarketInfraContainRoutingCode("NON_EXISTENT", "someCode");
+
+        // Then
+        assertFalse(result);
+    }
+
+    @Test
+    @DisplayName("Should return false immediately when cloud is disabled, regardless of other rules")
+    void doesMarketInfraContainRoutingCode_CloudDisabled_ReturnsFalse() {
+        // Given: Cloud is disabled
+        when(routingProperties.getIscloudenabled()).thenReturn(false);
+        // We can even set up routing rules, but they should be ignored
+        when(routingProperties.getMarketInfra()).thenReturn(
+                createMockMarketInfraList("XXX", "aaa,cc,dd", "TXXX", "bb,ff"));
+
+        // When & Then: All calls should return false
+        assertFalse(marketInfraMatcher.doesMarketInfraContainRoutingCode("XXX", "aaa"));
+        assertFalse(marketInfraMatcher.doesMarketInfraContainRoutingCode("TXXX", "bb"));
+        assertFalse(marketInfraMatcher.doesMarketInfraContainRoutingCode("XXX", "anyCode")); // Even wildcard would be false
+    }
+
+    @Test
+    @DisplayName("Should handle trimming of routing codes correctly from config")
+    void doesMarketInfraContainRoutingCode_HandlesTrimming() {
+        // Given: Cloud is enabled, and routing codes have leading/trailing spaces
+        when(routingProperties.getIscloudenabled()).thenReturn(true);
+        when(routingProperties.getMarketInfra()).thenReturn(
+                createMockMarketInfraList("XXX", " aaa , cc, dd ", "TXXX", "bb ,ff "));
+
+        // When & Then: Should match correctly after trimming
+        assertTrue(marketInfraMatcher.doesMarketInfraContainRoutingCode("XXX", "aaa"));
+        assertTrue(marketInfraMatcher.doesMarketInfraContainRoutingCode("XXX", "cc"));
+        assertTrue(marketInfraMatcher.doesMarketInfraContainRoutingCode("TXXX", "ff"));
+    }
+
+    @Test
+    @DisplayName("Should return false if MarketInfra list is null in properties")
+    void doesMarketInfraContainRoutingCode_NullMarketInfraList_ReturnsFalse() {
+        // Given: Cloud is enabled, but marketInfra list is null
+        when(routingProperties.getIscloudenabled()).thenReturn(true);
+        when(routingProperties.getMarketInfra()).thenReturn(null);
+
+        // When
+        boolean result = marketInfraMatcher.doesMarketInfraContainRoutingCode("XXX", "aaa");
+
+        // Then
+        assertFalse(result);
+    }
+
+    @Test
+    @DisplayName("Should return false if a specific MarketInfraDetail is null for an entry")
+    void doesMarketInfraContainRoutingCode_NullMarketInfraDetail_ReturnsFalse() {
+        // Given: Cloud is enabled, but "XXX" maps to a null detail object
+        when(routingProperties.getIscloudenabled()).thenReturn(true);
+        List<Map<String, RoutingProperties.MarketInfraDetail>> marketInfraList = new ArrayList<>();
+        marketInfraList.add(Collections.singletonMap("XXX", null)); // XXX maps to null detail
+        when(routingProperties.getMarketInfra()).thenReturn(marketInfraList);
+
+        // When
+        boolean result = marketInfraMatcher.doesMarketInfraContainRoutingCode("XXX", "aaa");
+
+        // Then
+        assertFalse(result);
+    }
+
+    @Test
+    @DisplayName("Should return false if routingCode property inside detail is null")
+    void doesMarketInfraContainRoutingCode_NullRoutingCodeProperty_ReturnsFalse() {
+        // Given: Cloud is enabled, but routingCode property is null for "XXX"
+        when(routingProperties.getIscloudenabled()).thenReturn(true);
+        List<Map<String, RoutingProperties.MarketInfraDetail>> marketInfraList = new ArrayList<>();
+        RoutingProperties.MarketInfraDetail detail = new RoutingProperties.MarketInfraDetail();
+        detail.setRoutingCode(null); // routingCode property is null
+        marketInfraList.add(Collections.singletonMap("XXX", detail));
+        when(routingProperties.getMarketInfra()).thenReturn(marketInfraList);
+
+        // When
+        boolean result = marketInfraMatcher.doesMarketInfraContainRoutingCode("XXX", "aaa");
+
+        // Then
+        assertFalse(result);
+    }
+
+
+    // --- Test cases for findMarketInfraByRoutingCode method (unchanged logic regarding iscloudenabled) ---
+
+    @Test
+    @DisplayName("findMarketInfraByRoutingCode: Should find market infra by routing code when it exists")
+    void findMarketInfraByRoutingCode_CodeExists_ReturnsMarketInfra() {
+        // Given
+        when(routingProperties.getMarketInfra()).thenReturn(
+                createMockMarketInfraList("XXX", "aaa,cc,dd", "TXXX", "bb,ff"));
+
+        // When
+        Optional<String> result = marketInfraMatcher.findMarketInfraByRoutingCode("aaa");
+
+        // Then
+        assertTrue(result.isPresent());
+        assertEquals("XXX", result.get());
+    }
+
+    @Test
+    @DisplayName("findMarketInfraByRoutingCode: Should not find market infra by routing code when it does not exist")
+    void findMarketInfraByRoutingCode_CodeDoesNotExist_ReturnsEmptyOptional() {
+        // Given
+        when(routingProperties.getMarketInfra()).thenReturn(
+                createMockMarketInfraList("XXX", "aaa,cc,dd", "TXXX", "bb,ff"));
+
+        // When
+        Optional<String> result = marketInfraMatcher.findMarketInfraByRoutingCode("zz");
+
+        // Then
+        assertFalse(result.isPresent());
+    }
+
+    @Test
+    @DisplayName("findMarketInfraByRoutingCode: Should not find market infra if config routing code is empty (not a wildcard for this method)")
+    void findMarketInfraByRoutingCode_EmptyConfigCode_ReturnsEmptyOptional() {
+        // Given: "XXX" has an empty routing code, but this method does not treat it as a wildcard
+        when(routingProperties.getMarketInfra()).thenReturn(
+                createMockMarketInfraList("XXX", "", "TXXX", "bb,ff"));
+
+        // When
+        Optional<String> result = marketInfraMatcher.findMarketInfraByRoutingCode("anyCode"); // "anyCode" is not explicitly in ""
+
+        // Then
+        assertFalse(result.isPresent());
+    }
+
+    @Test
+    @DisplayName("findMarketInfraByRoutingCode: Should return empty optional if MarketInfra list is null")
+    void findMarketInfraByRoutingCode_NullMarketInfraList_ReturnsEmptyOptional() {
+        // Given
+        when(routingProperties.getMarketInfra()).thenReturn(null);
+
+        // When
+        Optional<String> result = marketInfraMatcher.findMarketInfraByRoutingCode("aaa");
+
+        // Then
+        assertFalse(result.isPresent());
+    }
+
+    @Test
+    @DisplayName("findMarketInfraByRoutingCode: Should return empty optional if a specific MarketInfraDetail is null")
+    void findMarketInfraByRoutingCode_NullMarketInfraDetail_ReturnsEmptyOptional() {
+        // Given
+        List<Map<String, RoutingProperties.MarketInfraDetail>> marketInfraList = new ArrayList<>();
+        marketInfraList.add(Collections.singletonMap("XXX", null));
+        when(routingProperties.getMarketInfra()).thenReturn(marketInfraList);
+
+        // When
+        Optional<String> result = marketInfraMatcher.findMarketInfraByRoutingCode("aaa");
+
+        // Then
+        assertFalse(result.isPresent());
+    }
+
+    @Test
+    @DisplayName("findMarketInfraByRoutingCode: Should return empty optional if routingCode property inside detail is null")
+    void findMarketInfraByRoutingCode_NullRoutingCodeProperty_ReturnsEmptyOptional() {
+        // Given
+        List<Map<String, RoutingProperties.MarketInfraDetail>> marketInfraList = new ArrayList<>();
+        RoutingProperties.MarketInfraDetail detail = new RoutingProperties.MarketInfraDetail();
+        detail.setRoutingCode(null);
+        marketInfraList.add(Collections.singletonMap("XXX", detail));
+        when(routingProperties.getMarketInfra()).thenReturn(marketInfraList);
+
+        // When
+        Optional<String> result = marketInfraMatcher.findMarketInfraByRoutingCode("aaa");
+
+        // Then
+        assertFalse(result.isPresent());
+    }
+}
+```
