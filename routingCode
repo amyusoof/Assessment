@@ -1,0 +1,495 @@
+Okay, I'll provide a Java code example to match the logic of checking if a given routingCode is present within the routingCode list associated with a marketInfra in your provided YAML structure.
+
+First, let's assume you'll parse the YAML into a Java object structure. A common library for this is Jackson.
+
+Here's the YAML structure represented as Java classes and the logic to match the routing code:
+
+1. Maven pom.xml (for Jackson dependencies)
+
+XML
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>market-infra-router</artifactId>
+    <version>1.0-SNAPSHOT</version>
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.17.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+            <version>2.17.1</version>
+        </dependency>
+    </dependencies>
+
+</project>
+2. Java Classes for YAML Mapping
+
+These classes will represent the structure of your MarketInfra YAML.
+
+Java
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+// Main container for the YAML
+public class MarketInfraConfig {
+    @JsonProperty("MarketInfra")
+    private List<Map<String, MarketInfraDetail>> marketInfra;
+
+    public List<Map<String, MarketInfraDetail>> getMarketInfra() {
+        return marketInfra;
+    }
+
+    public void setMarketInfra(List<Map<String, MarketInfraDetail>> marketInfra) {
+        this.marketInfra = marketInfra;
+    }
+
+    @Override
+    public String toString() {
+        return "MarketInfraConfig{" +
+               "marketInfra=" + marketInfra +
+               '}';
+    }
+}
+
+// Represents the detail for each market infrastructure (e.g., XXX, TXXX)
+class MarketInfraDetail {
+    private String routingCode;
+
+    public String getRoutingCode() {
+        return routingCode;
+    }
+
+    public void setRoutingCode(String routingCode) {
+        this.routingCode = routingCode;
+    }
+
+    @Override
+    public String toString() {
+        return "MarketInfraDetail{" +
+               "routingCode='" + routingCode + '\'' +
+               '}';
+    }
+}
+3. MarketInfraMatcher Class (Core Logic)
+
+This class contains the logic to load the YAML and perform the matching.
+
+Java
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+public class MarketInfraMatcher {
+
+    private MarketInfraConfig config;
+
+    public MarketInfraMatcher(String yamlConfigString) throws IOException {
+        ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+        this.config = mapper.readValue(yamlConfigString, MarketInfraConfig.class);
+    }
+
+    public MarketInfraMatcher(InputStream yamlConfigStream) throws IOException {
+        ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+        this.config = mapper.readValue(yamlConfigStream, MarketInfraConfig.class);
+    }
+
+    /**
+     * Checks if the given 'routingCode' is present within the routing codes
+     * associated with the specified 'marketInfra'.
+     *
+     * @param marketInfra The market infrastructure identifier (e.g., "XXX", "TXXX").
+     * @param routingCode The routing code to check for.
+     * @return true if the routing code is found for the given market infra, false otherwise.
+     */
+    public boolean doesMarketInfraContainRoutingCode(String marketInfra, String routingCode) {
+        if (config == null || config.getMarketInfra() == null) {
+            return false;
+        }
+
+        // Find the specific market infrastructure entry
+        Optional<Map<String, MarketInfraDetail>> marketInfraEntry = config.getMarketInfra().stream()
+                .filter(map -> map.containsKey(marketInfra))
+                .findFirst();
+
+        if (marketInfraEntry.isPresent()) {
+            MarketInfraDetail detail = marketInfraEntry.get().get(marketInfra);
+            if (detail != null && detail.getRoutingCode() != null) {
+                // Split the comma-separated routing codes and check for existence
+                List<String> codes = Arrays.asList(detail.getRoutingCode().split(","))
+                                         .stream()
+                                         .map(String::trim) // Trim whitespace from each code
+                                         .collect(Collectors.toList());
+                return codes.contains(routingCode);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Finds the MarketInfra identifier that contains the given routing code.
+     * Useful if you only have a routing code and want to know which MarketInfra it belongs to.
+     *
+     * @param routingCode The routing code to search for.
+     * @return An Optional containing the MarketInfra identifier if found, otherwise empty.
+     */
+    public Optional<String> findMarketInfraByRoutingCode(String routingCode) {
+        if (config == null || config.getMarketInfra() == null) {
+            return Optional.empty();
+        }
+
+        for (Map<String, MarketInfraDetail> entryMap : config.getMarketInfra()) {
+            for (Map.Entry<String, MarketInfraDetail> entry : entryMap.entrySet()) {
+                String marketInfraName = entry.getKey();
+                MarketInfraDetail detail = entry.getValue();
+
+                if (detail != null && detail.getRoutingCode() != null) {
+                    List<String> codes = Arrays.asList(detail.getRoutingCode().split(","))
+                                             .stream()
+                                             .map(String::trim)
+                                             .collect(Collectors.toList());
+                    if (codes.contains(routingCode)) {
+                        return Optional.of(marketInfraName);
+                    }
+                }
+            }
+        }
+        return Optional.empty();
+    }
+}
+4. Example Usage
+
+Let's put it all together in a Main class to demonstrate.
+
+Java
+
+import java.io.IOException;
+import java.io.InputStream;
+
+public class Main {
+
+    public static void main(String[] args) {
+        String yamlContent = """
+                MarketInfra:
+                   - XXX:
+                      routingCode: aaa,cc,dd,gg
+                   - TXXX:
+                      routingCode: bb, dd, ff
+                """;
+
+        try {
+            // Option 1: Load from a string
+            MarketInfraMatcher matcherFromString = new MarketInfraMatcher(yamlContent);
+
+            System.out.println("--- Testing doesMarketInfraContainRoutingCode ---");
+            System.out.println("Does XXX contain 'aaa'? " + matcherFromString.doesMarketInfraContainRoutingCode("XXX", "aaa")); // true
+            System.out.println("Does XXX contain 'zz'? " + matcherFromString.doesMarketInfraContainRoutingCode("XXX", "zz"));   // false
+            System.out.println("Does TXXX contain 'dd'? " + matcherFromString.doesMarketInfraContainRoutingCode("TXXX", "dd")); // true
+            System.out.println("Does ZZZ contain 'aaa'? " + matcherFromString.doesMarketInfraContainRoutingCode("ZZZ", "aaa")); // false (MarketInfra not found)
+            System.out.println("Does XXX contain 'gg'? " + matcherFromString.doesMarketInfraContainRoutingCode("XXX", "gg"));   // true
+
+
+            System.out.println("\n--- Testing findMarketInfraByRoutingCode ---");
+            matcherFromString.findMarketInfraByRoutingCode("aaa").ifPresentOrElse(
+                mi -> System.out.println("Routing code 'aaa' found in MarketInfra: " + mi),
+                () -> System.out.println("Routing code 'aaa' not found in any MarketInfra.")
+            ); // XXX
+
+            matcherFromString.findMarketInfraByRoutingCode("ff").ifPresentOrElse(
+                mi -> System.out.println("Routing code 'ff' found in MarketInfra: " + mi),
+                () -> System.out.println("Routing code 'ff' not found in any MarketInfra.")
+            ); // TXXX
+
+            matcherFromString.findMarketInfraByRoutingCode("xyz").ifPresentOrElse(
+                mi -> System.out.println("Routing code 'xyz' found in MarketInfra: " + mi),
+                () -> System.out.println("Routing code 'xyz' not found in any MarketInfra.")
+            ); // Not found
+
+
+            // Option 2: Load from a file (e.g., src/main/resources/market_infra.yaml)
+            // You would need to create a file named market_infra.yaml in your src/main/resources directory
+            // with the YAML content provided above.
+            /*
+            System.out.println("\n--- Loading from file ---");
+            try (InputStream is = Main.class.getClassLoader().getResourceAsStream("market_infra.yaml")) {
+                if (is == null) {
+                    System.err.println("market_infra.yaml not found in classpath.");
+                    return;
+                }
+                MarketInfraMatcher matcherFromFile = new MarketInfraMatcher(is);
+                System.out.println("Does XXX contain 'cc' (from file)? " + matcherFromFile.doesMarketInfraContainRoutingCode("XXX", "cc"));
+            }
+            */
+
+        } catch (IOException e) {
+            System.err.println("Error parsing YAML: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
+How to Run:
+
+Save the files:
+
+pom.xml in your project root.
+
+MarketInfraConfig.java, MarketInfraDetail.java, MarketInfraMatcher.java, and Main.java in src/main/java/com/example (or your preferred package structure).
+
+Build with Maven: Open a terminal in your project root and run:
+
+Bash
+
+mvn clean install
+Run the application:
+
+Bash
+
+mvn exec:java -Dexec.mainClass="Main"
+Explanation:
+
+MarketInfraConfig and MarketInfraDetail: These classes define the structure that Jackson will use to deserialize your YAML.
+
+@JsonProperty("MarketInfra") maps the top-level MarketInfra key in the YAML.
+
+The marketInfra field in MarketInfraConfig is a List<Map<String, MarketInfraDetail>> because your YAML has a list where each item is a map with a single key (e.g., "XXX") and its value is the MarketInfraDetail.
+
+MarketInfraMatcher:
+
+The constructor takes the YAML content (either as a string or an InputStream) and uses ObjectMapper (from Jackson) with YAMLFactory to parse it into the MarketInfraConfig object.
+
+doesMarketInfraContainRoutingCode(String marketInfra, String routingCode):
+
+It iterates through the marketInfra list to find the map that contains the given marketInfra key (e.g., "XXX").
+
+Once found, it retrieves the MarketInfraDetail object.
+
+It then gets the routingCode string (e.g., "aaa,cc,dd,gg").
+
+Arrays.asList(detail.getRoutingCode().split(",")) splits this string by commas into a List<String>.
+
+.stream().map(String::trim).collect(Collectors.toList()) is used to trim any whitespace around the comma-separated values (e.g., " dd" becomes "dd").
+
+Finally, codes.contains(routingCode) checks if the provided routingCode is in that list.
+
+findMarketInfraByRoutingCode(String routingCode): This is an added utility method that lets you find which MarketInfra (e.g., "XXX" or "TXXX") contains a specific routingCode.
+
+Main: Demonstrates how to create an instance of MarketInfraMatcher and use its methods with example data.
+
+This code provides a robust way to parse your YAML and implement the described routing code matching logic.
+
+
+
+
+
+
+
+
+make the following change to above, if routingcode is empty return true
+
+
+Got it. If the routingCode is empty within the YAML for a given marketInfra, you want the doesMarketInfraContainRoutingCode method to return true, essentially meaning that an empty routingCode list acts as a wildcard.
+
+Here's the updated MarketInfraMatcher class with that logic:
+
+Updated MarketInfraMatcher Class
+Java
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+public class MarketInfraMatcher {
+
+    private MarketInfraConfig config; // Assuming MarketInfraConfig and MarketInfraDetail are defined as before
+
+    public MarketInfraMatcher(String yamlConfigString) throws IOException {
+        ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+        this.config = mapper.readValue(yamlConfigString, MarketInfraConfig.class);
+    }
+
+    public MarketInfraMatcher(InputStream yamlConfigStream) throws IOException {
+        ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+        this.config = mapper.readValue(yamlConfigStream, MarketInfraConfig.class);
+    }
+
+    /**
+     * Checks if the given 'routingCode' is present within the routing codes
+     * associated with the specified 'marketInfra'.
+     * If the marketInfra's routingCode in the configuration is empty, it returns true (acts as a wildcard).
+     *
+     * @param marketInfra The market infrastructure identifier (e.g., "XXX", "TXXX").
+     * @param routingCode The routing code to check for.
+     * @return true if the routing code is found for the given market infra, or if the market infra's
+     * routingCode is empty (wildcard), false otherwise.
+     */
+    public boolean doesMarketInfraContainRoutingCode(String marketInfra, String routingCode) {
+        if (config == null || config.getMarketInfra() == null) {
+            return false;
+        }
+
+        // Find the specific market infrastructure entry
+        Optional<Map<String, MarketInfraDetail>> marketInfraEntry = config.getMarketInfra().stream()
+                .filter(map -> map.containsKey(marketInfra))
+                .findFirst();
+
+        if (marketInfraEntry.isPresent()) {
+            MarketInfraDetail detail = marketInfraEntry.get().get(marketInfra);
+            if (detail != null && detail.getRoutingCode() != null) {
+                // Trim the entire string to handle cases like " " or empty string
+                String rawRoutingCode = detail.getRoutingCode().trim();
+
+                // *** NEW LOGIC: If the routingCode is empty or only whitespace, return true (wildcard) ***
+                if (rawRoutingCode.isEmpty()) {
+                    return true;
+                }
+
+                // Existing logic: Split the comma-separated routing codes and check for existence
+                List<String> codes = Arrays.asList(rawRoutingCode.split(","))
+                                         .stream()
+                                         .map(String::trim) // Trim whitespace from each code
+                                         .collect(Collectors.toList());
+                return codes.contains(routingCode);
+            }
+        }
+        return false;
+    }
+
+    // findMarketInfraByRoutingCode method remains the same as it doesn't have the "empty routingCode returns true" logic.
+    /**
+     * Finds the MarketInfra identifier that contains the given routing code.
+     * Useful if you only have a routing code and want to know which MarketInfra it belongs to.
+     *
+     * @param routingCode The routing code to search for.
+     * @return An Optional containing the MarketInfra identifier if found, otherwise empty.
+     */
+    public Optional<String> findMarketInfraByRoutingCode(String routingCode) {
+        if (config == null || config.getMarketInfra() == null) {
+            return Optional.empty();
+        }
+
+        for (Map<String, MarketInfraDetail> entryMap : config.getMarketInfra()) {
+            for (Map.Entry<String, MarketInfraDetail> entry : entryMap.entrySet()) {
+                String marketInfraName = entry.getKey();
+                MarketInfraDetail detail = entry.getValue();
+
+                if (detail != null && detail.getRoutingCode() != null) {
+                    // Trim the entire string to handle cases like " " or empty string
+                    String rawRoutingCode = detail.getRoutingCode().trim();
+                    
+                    // This method's logic does NOT treat empty as a wildcard for finding.
+                    // It requires the routingCode to be explicitly present.
+                    if (!rawRoutingCode.isEmpty()) {
+                        List<String> codes = Arrays.asList(rawRoutingCode.split(","))
+                                                 .stream()
+                                                 .map(String::trim)
+                                                 .collect(Collectors.toList());
+                        if (codes.contains(routingCode)) {
+                            return Optional.of(marketInfraName);
+                        }
+                    }
+                }
+            }
+        }
+        return Optional.empty();
+    }
+}
+Key Change
+The crucial change is within the doesMarketInfraContainRoutingCode method:
+
+Java
+
+                String rawRoutingCode = detail.getRoutingCode().trim();
+
+                // *** NEW LOGIC: If the routingCode is empty or only whitespace, return true (wildcard) ***
+                if (rawRoutingCode.isEmpty()) {
+                    return true;
+                }
+This line now checks if rawRoutingCode (after trimming whitespace) is empty. If it is, the method immediately returns true, fulfilling your requirement for it to act as a wildcard.
+
+Example Usage with New Scenario
+Let's modify the yamlContent in Main.java to include an empty routingCode for "XXX" and test the new logic.
+
+Java
+
+import java.io.IOException;
+import java.io.InputStream;
+
+public class Main {
+
+    public static void main(String[] args) {
+        String yamlContent = """
+                MarketInfra:
+                   - XXX:
+                      routingCode: "" # Empty routing code for XXX
+                   - TXXX:
+                      routingCode: bb, dd, ff
+                   - ZZZ:
+                      routingCode:  # Also empty/null like (or just whitespace)
+                """;
+
+        try {
+            MarketInfraMatcher matcher = new MarketInfraMatcher(yamlContent);
+
+            System.out.println("--- Testing doesMarketInfraContainRoutingCode with empty routingCode ---");
+            System.out.println("Does XXX contain 'anyCode'? " + matcher.doesMarketInfraContainRoutingCode("XXX", "anyCode")); // true (because XXX's routingCode is empty)
+            System.out.println("Does XXX contain 'anotherCode'? " + matcher.doesMarketInfraContainRoutingCode("XXX", "anotherCode")); // true
+            System.out.println("Does ZZZ contain 'anyCode'? " + matcher.doesMarketInfraContainRoutingCode("ZZZ", "someCode")); // true (because ZZZ's routingCode is effectively empty)
+
+            System.out.println("Does TXXX contain 'dd'? " + matcher.doesMarketInfraContainRoutingCode("TXXX", "dd")); // true (existing logic)
+            System.out.println("Does TXXX contain 'anyCode'? " + matcher.doesMarketInfraContainRoutingCode("TXXX", "anyCode")); // false (not a wildcard)
+
+            System.out.println("\n--- Testing findMarketInfraByRoutingCode (no change in logic for empty) ---");
+            matcher.findMarketInfraByRoutingCode("aaa").ifPresentOrElse(
+                mi -> System.out.println("Routing code 'aaa' found in MarketInfra: " + mi),
+                () -> System.out.println("Routing code 'aaa' not found in any MarketInfra.")
+            ); // Not found, because XXX's is empty
+            
+            matcher.findMarketInfraByRoutingCode("dd").ifPresentOrElse(
+                mi -> System.out.println("Routing code 'dd' found in MarketInfra: " + mi),
+                () -> System.out.println("Routing code 'dd' not found in any MarketInfra.")
+            ); // TXXX
+
+        } catch (IOException e) {
+            System.err.println("Error parsing YAML: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
+Now, when you run this Main class, you'll see that doesMarketInfraContainRoutingCode("XXX", "anyCode") returns true because "XXX" has an empty routingCode in the YAML, which acts as a wildcard.
